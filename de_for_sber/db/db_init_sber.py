@@ -24,6 +24,7 @@ sessions_table = Table(
     Column('utm_medium', String, nullable=True),
     Column('utm_campaign', String, nullable=True),
     Column('utm_keyword', String, nullable=True),
+    Column('utm_adcontent', String, nullable=True),
     Column('device_category', String, nullable=True),
     Column('device_os', String, nullable=True),
     Column('device_brand', String, nullable=True),
@@ -35,10 +36,9 @@ sessions_table = Table(
 
 hits_table = Table(
     'hits', metadata,
-    Column('hit_id', Integer, primary_key=True, autoincrement=True),
+    Column('hit_id', String, primary_key=True, autoincrement=True),
     Column('session_id', String, ForeignKey('sessions.session_id'), nullable=False),
     Column('hit_date', Date, nullable=False),
-    Column('hit_time', Time, nullable=False),
     Column('hit_number', Integer, nullable=False),
     Column('hit_type', String, nullable=True),
     Column('hit_referer', String, nullable=True),
