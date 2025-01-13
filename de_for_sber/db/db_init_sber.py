@@ -3,6 +3,7 @@ from sqlalchemy import MetaData, Table, Column, Integer, String, ForeignKey, Dat
 
 # Создание метаданных
 metadata = MetaData()
+
 # Параметры подключения
 DB_NAME = "sber_de"
 USER = "Ekaterina_Firsova"
@@ -11,7 +12,7 @@ HOST = "localhost"
 PORT = 5432
 
 # Создание подключения
-engine = create_engine(f"postgresql+psycopg2://{'Ekaterina_Firsova'}:{'376d51'}@{'localhost'}:{5432}/{'sber_de'}")
+engine = create_engine(f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DB_NAME}")
 connection = engine.connect()
 sessions_table = Table(
     'sessions', metadata,
