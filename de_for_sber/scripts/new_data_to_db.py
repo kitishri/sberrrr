@@ -22,20 +22,9 @@ def load_flags():
         with open(FLAGS_FILE, 'r') as file:
             return json.load(file)
     else:
-        # Если файла нет, создаем структуру с начальными флажками
         flags = {
-            "hits_data": {
-                "data_loaded": False,
-                "data_valid": False,
-                "data_transformed": False,
-                "data_saved": False
-            },
-            "sessions_data": {
-                "data_loaded": False,
-                "data_valid": False,
-                "data_transformed": False,
-                "data_saved": False
-            }
+            "sessions_data": {},
+            "hits_data": {}
         }
         save_flags(flags)
         return flags
@@ -46,89 +35,92 @@ def save_flags(flags):
         json.dump(flags, file, indent=4)
 
 
-def load_new_files(directory):
+def load_new_files(directory, flags, flag_key):
     dataframes = []
     file_paths = []
+
     for file in os.listdir(directory):
         file_path = os.path.join(directory, file)
+
+        file_flags = flags[flag_key].get(file)
+        if file_flags is None:
+            file_flags = {
+                "loaded": False,
+                "valid": False,
+                "transformed": False,
+                "saved": False,
+                "to_db": False
+            }
+            flags[flag_key][file] = file_flags
+
+        # Загружаем только файлы, которые еще не были обработаны
+        if file_flags["loaded"]:
+            continue
+
         if file.endswith(".json") and os.path.isfile(file_path):
             logger.info(f"Loading file: {file_path}")
+
+            # Загружаем данные из файла
             with open(file_path, 'r') as filee:
                 data_new = json.load(filee)
-            all_sessions = []
-            for year_data in data_new.values():
-                all_sessions.extend(year_data)
 
+            if not data_new:
+                logger.warning(f"File {file_path} is empty. Skipping.")
+                continue
+
+
+            all_sessions = [session for year_data in data_new.values() for session in year_data]
             df = pd.DataFrame(all_sessions)
-
             dataframes.append(df)
             file_paths.append(file_path)
 
-            print(f"File {file} loaded, {df.shape[0]} rows.")
-        else:
-            print(f"File {file} is not a JSON or does not exist.")
+
+            flags[flag_key][file]["loaded"] = True
+            save_flags(flags)
+
+
     return dataframes, file_paths
 
 
-# Загрузка данных для sessions
 def load_sessions(flags):
-    sessions_data = []
-    if not flags["sessions_data"]["data_loaded"]:
-        logger.info("Loading data for sessions...")
-        sessions_data, file_paths = load_new_files(os.path.join(RAW_DIR, "new_sessions"))  # Загрузка файлов для sessions
-        flags["sessions_data"]["data_loaded"] = True
-        save_flags(flags)
-    else:
-        logger.info("Data for sessions has already been loaded.")
+    # Загружаем новые файлы для сессий
+    sessions_data, file_paths = load_new_files(os.path.join(RAW_DIR, "new_sessions"), flags, "sessions_data")
+
+    save_flags(flags)
+
     return sessions_data, file_paths
 
-# Загрузка данных для hits
-def load_hits(flags):
-    hits_data = []
-    if not flags["hits_data"]["data_loaded"]:
-        logger.info("Loading data for hits...")
-        hits_data = load_new_files(os.path.join(RAW_DIR, "new_hits"))  # Загрузка файлов для hits
-        flags["hits_data"]["data_loaded"] = True
-        save_flags(flags)
-    else:
-        logger.info("Data for hits has already been loaded.")
-    return hits_data
-
-
-def validate_sessions(df):
-
+def validate_sessions(df, file_path):
     if df.empty:
-        logger.error("DataFrame is empty")
-        return
+        logger.error(f"File {file_path} is empty. Skipping.")
+        return False
+
     # Проверка обязательных колонок
+    required_columns = [
+        'session_id', 'client_id', 'visit_date', 'visit_time', 'visit_number',
+        'utm_source', 'utm_medium', 'utm_campaign', 'utm_keyword',
+        'device_category', 'device_os', 'device_brand', 'device_model',
+        'device_screen_resolution', 'device_browser', 'geo_country', 'geo_city'
+    ]
 
-    required_columns = ['session_id', 'client_id', 'visit_date', 'visit_time', 'visit_number',
-                        'utm_source', 'utm_medium', 'utm_campaign', 'utm_keyword',
-                        'device_category', 'device_os', 'device_brand', 'device_model',
-                        'device_screen_resolution', 'device_browser', 'geo_country', 'geo_city']
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        logger.error(f"File {file_path} is missing columns: {', '.join(missing_columns)}. Skipping.")
+        return False
 
-    for col in required_columns:
-        if col not in df.columns:
-            logger.error(f"Missing required column: {col}")
-            return
-
-
-        # Проверка уникальности session_id
-    if 'session_id' not in df.columns:
-        logger.error("Missing 'session_id'")
-        return
+    # Проверка уникальности session_id
     if df['session_id'].duplicated().any():
-        logger.error("Duplicate session_id found")
-        return
-    else:
-        logger.info("All session_id are unique.")
+        logger.error(f"File {file_path} has duplicate 'session_id'. Skipping.")
+        return False
+
+    return True
 
 
 def transform_sessions(df):
     # Заполнение пропусков
     for column in ['utm_campaign', 'utm_adcontent', 'utm_keyword', 'device_os', 'device_brand', 'utm_source']:
         df[column] = df[column].fillna('unknown')
-        logger.info(f"Column {column} has been transformed.")
+    logger.info(f"Columns have been transformed.")
 
     # Преобразование дат
     df["visit_date"] = pd.to_datetime(df["visit_date"], errors='coerce')

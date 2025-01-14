@@ -4,70 +4,88 @@ import os
 import json
 import pandas as pd
 from logging_config import logger
-from new_data_to_db import load_sessions, load_hits, transform_sessions, validate_sessions, load_flags, save_flags
+from new_data_to_db import load_sessions, transform_sessions, validate_sessions, load_flags, save_flags
 
 
 
-# Основная функция обработки sessions
 def process_new_sessions():
 
     flags = load_flags()
 
-    # Проверка и загрузка данных
     sessions_data, file_paths = load_sessions(flags)
 
-    # Проверка валидации
-    if flags["sessions_data"]["data_loaded"] and not flags["sessions_data"]["data_valid"]:
-        logger.info("Validating data for sessions...")
-        for i, (session_data, file_path) in enumerate(zip(sessions_data, file_paths)):
-            logger.info(f"Validating file: {file_path}")
+    def get_session_data(sessions_data, file_paths, file_name):
 
-            if session_data.empty:
-                logger.error(f"File {file_path} is empty. Skipping.")
-                continue  # Пропускаем пустой файл
+        return next((df for df, path in zip(sessions_data, file_paths) if os.path.basename(path) == file_name), None)
 
-            if 'session_id' not in session_data.columns:
-                logger.error(f"File {file_path} is missing 'session_id' column. Skipping.")
-                continue  # Пропускаем файл, если нет 'session_id'
+    # Валидация данных
+    for file_path in file_paths:
+        file_name = os.path.basename(file_path)
+        session_data = get_session_data(sessions_data, file_paths, file_name)
 
-                # Выполнение валидации
-            if not validate_sessions(session_data):
-                logger.error(f"Validation failed for file: {file_path}. Skipping.")
-                continue
+        if file_name not in flags["sessions_data"] or not flags["sessions_data"][file_name]["loaded"]:
+            logger.info(f"File {file_name} has not been loaded yet or is missing flags. Skipping validation.")
+            continue
 
-            flags["sessions_data"]["data_valid"] = True
-            save_flags(flags)
-    else:
-        logger.info("Data for sessions has already been validated.")
+        if flags["sessions_data"][file_name]["valid"]:
+            logger.info(f"File {file_name} has already been validated.")
+            continue
+
+        logger.info(f"Validating data for {file_name}...")
+        session_data = get_session_data(sessions_data, file_paths, file_name)
+
+        if session_data is not None and validate_sessions(session_data, file_name):
+            flags["sessions_data"][file_name]["valid"] = True
+            logger.info(f"File {file_name} passed validation.")
+        else:
+            logger.error(f"File {file_name} failed validation or is missing data. Skipping.")
+
+    save_flags(flags)
 
     # Трансформация данных
-    if flags["sessions_data"]["data_valid"] and not flags["sessions_data"]["data_transformed"]:
-        logger.info("Transforming data for sessions...")
-        for i, (session_data, file_path) in enumerate(zip(sessions_data, file_paths)):
-            if session_data.empty:
-                logger.warning(f"File {file_path} is empty. Skipping transformation.")
-                continue  # Пропускаем пустые данные
+    for file_path in file_paths:
+        file_name = os.path.basename(file_path)
 
-            logger.info(f"Transforming file: {file_path}")
-            transformed_data = transform_sessions(session_data)  # Трансформация
-            output_file = os.path.join(PROCESSED_DIR, f"transformed_sessions_{i + 1}.csv")
-            transformed_data.to_csv(output_file, index=False)
-            logger.info(f"Transformed data saved to file: {output_file}")
+        if file_name not in flags["sessions_data"]:
+            logger.error(f"File {file_name} is missing flags. Skipping transformation.")
+            continue
 
-        flags["sessions_data"]["data_transformed"] = True
-        save_flags(flags)
-    else:
-        logger.info("Data for sessions has already been transformed.")
+        if flags["sessions_data"][file_name]["valid"] and not flags["sessions_data"][file_name]["transformed"]:
+            logger.info(f"Transforming data for {file_name}...")
+            session_data = get_session_data(sessions_data, file_paths, file_name)
+
+            if session_data is not None:
+
+                transformed_data = transform_sessions(session_data)
+                output_file = os.path.join(PROCESSED_DIR, 'new', f"transformed_sessions_{file_name}")
+                transformed_data.to_csv(output_file, index=False)
+                logger.info(f"Transformed data saved to file: {output_file}")
+                flags["sessions_data"][file_name]["transformed"] = True
+
+            else:
+                logger.warning(f"File {file_name} is missing or empty. Skipping transformation.")
+        else:
+            logger.info(f"File {file_name} has already been transformed or been skipped.")
+
+
+    save_flags(flags)
 
     # Сохранение данных
-    if flags["sessions_data"]["data_transformed"] and not flags["sessions_data"]["data_saved"]:
-        logger.info("Saving transformed data for sessions...")
-        flags["sessions_data"]["data_saved"] = True
-        save_flags(flags)
-    else:
-        logger.info("Transformed data for sessions has already been saved.")
+    for file_path in file_paths:
+        file_name = os.path.basename(file_path)  # Извлекаем имя файла из пути
+        if file_name not in flags["sessions_data"]:
+            logger.error(f"File {file_name} is missing flags. Skipping saving.")
+            continue
 
+        if flags["sessions_data"][file_name]["transformed"] and not flags["sessions_data"][file_name]["saved"]:
+            logger.info(f"Saving transformed data for {file_name}...")
+            # Тут должен быть код для сохранения данных в БД или в файл
+            flags["sessions_data"][file_name]["saved"] = True
+            logger.info(f"File {file_name} has been saved.")
+        else:
+            logger.info(f"File {file_name} has already been saved or been skipped.")
 
+    save_flags(flags)
 
 def main():
 
