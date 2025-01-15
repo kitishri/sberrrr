@@ -6,15 +6,7 @@ from sqlalchemy import create_engine
 from configs.config import LOGS_DIR, FLAGS_FILE,LOG_FILE, CONFIGS_DIR, PROCESSED_DIR, RAW_DIR
 from logging_config import logger
 
-# Параметры подключения
-DB_NAME = "sber_de"
-USER = "Ekaterina_Firsova"
-PASSWORD = "376d51"
-HOST = "localhost"
-PORT = 5432
 
-# Создание подключения
-engine = create_engine(f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DB_NAME}")
 
 # Функция для загрузки флажков
 def load_flags():
@@ -90,6 +82,7 @@ def load_sessions(flags):
 
     return sessions_data, file_paths
 
+
 def validate_sessions(df, file_path):
     if df.empty:
         logger.error(f"File {file_path} is empty. Skipping.")
@@ -140,3 +133,53 @@ def transform_sessions(df):
 
     return df
 
+
+def load_hits(flags):
+    # Загружаем новые файлы для hits
+    hits_data, file_paths = load_new_files(os.path.join(RAW_DIR, "new_hits"), flags, "hits_data")
+
+    save_flags(flags)
+
+    return hits_data, file_paths
+
+
+def validate_hits(df, file_path):
+    if df.empty:
+        logger.error(f"File {file_path} is empty. Skipping.")
+        return False
+
+    # Проверка обязательных колонок
+    required_columns = ["session_id", "hit_date", "hit_time", "hit_number", "hit_type", "hit_referer", "hit_page_path",
+         "event_category", "event_action", "event_label", "event_value"
+                        ]
+
+
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        logger.error(f"File {file_path} is missing columns: {', '.join(missing_columns)}. Skipping.")
+        return False
+
+
+    return True
+
+
+def transform_hits(df):
+    # Заполнение пропусков
+    for column in ['hit_referer','event_label']:
+        df[column] = df[column].fillna('unknown')
+    df['event_value'] = df['event_value'].fillna(0)
+    logger.info(f"Columns have been transformed.")
+
+    # Преобразование дат
+    df['hit_date'] = pd.to_datetime(df['hit_date'], errors='coerce')
+    logger.info(f"Date has been transformed.")
+
+    # Удаление ненужной колонки
+    df = df.drop(columns='hit_time')
+    logger.info(f"Hit time has been dropped.")
+
+    df['hit_id'] = df['session_id'].astype(str) + '_' + df['hit_number'].astype(str)
+    duplicates = df[df.duplicated(subset='hit_id', keep=False)]
+    df = df.drop_duplicates(subset='hit_id', keep='first')
+
+    return df
