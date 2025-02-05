@@ -37,17 +37,15 @@ sessions_table = Table(
 
 hits_table = Table(
     'hits', metadata,
-    Column('hit_id', String, primary_key=True, autoincrement=True),
+    Column('hit_id', String, primary_key=True),
     Column('session_id', String, ForeignKey('sessions.session_id'), nullable=False),
     Column('hit_date', Date, nullable=False),
     Column('hit_number', Integer, nullable=False),
-    Column('hit_type', String, nullable=True),
     Column('hit_referer', String, nullable=True),
     Column('hit_page_path', String, nullable=True),
     Column('event_category', String, nullable=True),
     Column('event_action', String, nullable=True),
-    Column('event_label', String, nullable=True),
-    Column('event_value', Integer, nullable=True)
+    Column('event_label', String, nullable=True)
 )
 metadata.create_all(engine)
 print("Таблицы созданы успешно!")

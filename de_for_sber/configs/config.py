@@ -9,8 +9,9 @@ LOGS_DIR = os.path.join(DATA_DIR, "logs")
 CONFIGS_DIR = os.path.join(BASE_DIR, "configs")
 
 # Пути к файлам
-FLAGS_FILE = os.path.join(CONFIGS_DIR, "processing_flags.json")
-LOG_FILE = os.path.join(LOGS_DIR, "data_processing.log")
+FLAGS_FILE_HITS = os.path.join(CONFIGS_DIR, "processing_flags_hits.json")
+FLAGS_FILE_SESSIONS = os.path.join(CONFIGS_DIR, "processing_flags_sessions.json")
+
 
 
 

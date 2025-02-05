@@ -14,10 +14,10 @@ PORT = 5432
 engine = create_engine(f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DB_NAME}")
 
 # Загрузка данных
-hits = pd.read_csv("C:/Users/Ekaterina/sber_de/de_for_sber/data/processed/df_sessions_filtered.csv")
+hits = pd.read_pickle("C:/Users/Ekaterina/sber_de/de_for_sber/data/processed/filtered_processed_hits.pkl")
 
 
 # Загрузка данных в таблицу hits
-hits.to_sql('hits', engine, if_exists='append', index=False, chunksize=10000)
+hits.to_sql('hits', engine, if_exists='append', index=False, chunksize=100000)
 print("Данные из hits успешно загружены!")
 
