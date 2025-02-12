@@ -1,0 +1,22 @@
+{
+    "sessions_data": {
+        "ga_sessions_new_2022-01-01.json": {
+            "loaded": false,
+            "transformed": false,
+            "to_db": false,
+            "saved": false
+        },
+        "ga_sessions_new_2022-01-02.pkl": {
+            "loaded": true,
+            "transformed": true,
+            "to_db": true,
+            "saved": true
+        },
+        "ga_sessions_new_2022-01-02.json": {
+            "loaded": true,
+            "transformed": false,
+            "to_db": false,
+            "saved": false
+        }
+    }
+}
