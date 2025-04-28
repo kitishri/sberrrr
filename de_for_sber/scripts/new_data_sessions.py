@@ -147,3 +147,19 @@ def send_sessions_to_db():
 
             except Exception as e:
                 logger.error(f"Error saving data for {file_name} to the database: {e}")
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Transform and send to db")
+    parser.add_argument("--process", action="store_true", help="Transforming")
+    parser.add_argument("--to_db", action="store_true", help="SEnding to db")
+
+    args = parser.parse_args()
+
+    if args.process:
+        transform_new_files_sessions()
+
+    if args.to_db:
+        send_sessions_to_db()

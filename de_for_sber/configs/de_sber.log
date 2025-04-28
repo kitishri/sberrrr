@@ -1,0 +1,15 @@
+2025-04-25 09:25:50 - INFO - Airflow DAG has started.
+2025-04-25 09:25:56 - WARNING - File ga_sessions_new_2022-01-01.json contains no valid sessions. Skipping.
+2025-04-25 09:25:56 - INFO - File ga_sessions_new_2022-01-02.json has already been loaded. Skipping.
+2025-04-25 09:26:07 - WARNING - File ga_hits_new_2022-01-01.json contains no valid sessions. Skipping.
+2025-04-25 09:26:07 - WARNING - File ga_hits_new_2022-01-02.json has already been loaded. Skipping.
+2025-04-25 09:26:07 - INFO - All files have been processed.
+2025-04-26 17:47:08 - WARNING - PROJECT_PATH is not set. Using current directory as default.
+2025-04-26 17:47:08 - INFO - Metrics pushed to Pushgateway
+2025-04-26 17:50:32 - WARNING - PROJECT_PATH is not set. Using current directory as default.
+2025-04-26 17:50:32 - WARNING - File ga_hits_new_2022-01-01.json contains no valid sessions. Skipping.
+2025-04-26 17:50:32 - WARNING - File ga_hits_new_2022-01-02.json has already been loaded. Skipping.
+2025-04-26 17:50:32 - INFO - All files have been processed.
+2025-04-26 17:50:32 - INFO - Metrics pushed to Pushgateway
+2025-04-26 17:56:48 - WARNING - PROJECT_PATH is not set. Using current directory as default.
+2025-04-26 17:56:49 - INFO - Metrics pushed to Pushgateway

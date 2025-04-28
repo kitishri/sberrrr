@@ -1,17 +1,21 @@
 import sys
 import os
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.python import PythonOperator
 
 path = '/opt/airflow'
 os.environ['PROJECT_PATH'] = path
 print("Текущая рабочая директория:", os.getcwd())
 sys.path.insert(0, path)
 
-from airflow import DAG
-from airflow.operators.python import PythonOperator
-from datetime import datetime, timedelta
-from scripts.new_data_hits import load_flags_hits, transform_new_files_hits, send_hits_to_db
-from scripts.new_data_sessions import transform_new_files_sessions, load_flags_sessions, send_sessions_to_db
-from configs.logging_config import log_message, logger
+from scripts.new_data_hits import (
+    load_flags_hits, transform_new_files_hits, send_hits_to_db
+)
+from scripts.new_data_sessions import (
+    load_flags_sessions, transform_new_files_sessions, send_sessions_to_db
+)
+from configs.logging_config import log_message
 
 default_args = {
     'owner': 'airflow',
@@ -21,10 +25,11 @@ default_args = {
 }
 
 dag = DAG(
-    'sber_dag',
+    dag_id='sber_dag',
     default_args=default_args,
-    description='DAG for processing, transforming, and sending data to DB',
+    description='DAG for transforming and sending sessions/hits to DB',
     schedule_interval=None,
+    catchup=False,
 )
 
 task_load_logger = PythonOperator(
