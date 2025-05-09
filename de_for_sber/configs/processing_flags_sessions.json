@@ -1,6 +1,6 @@
 {
     "sessions_data": {
-        "ga_sessions_new_2022-01-01.json": {
+        "ga_sessions_new_2022-01-01.pkl": {
             "loaded": false,
             "transformed": false,
             "to_db": false,
@@ -12,11 +12,11 @@
             "to_db": true,
             "saved": true
         },
-        "ga_sessions_new_2022-01-02.json": {
+        "ga_sessions_new_2022-01-03.pkl": {
             "loaded": true,
-            "transformed": false,
-            "to_db": false,
-            "saved": false
+            "transformed": true,
+            "to_db": true,
+            "saved": true
         }
     }
 }

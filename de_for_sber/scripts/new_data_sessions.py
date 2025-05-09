@@ -1,7 +1,6 @@
 import pandas as pd
 import os
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from dotenv import load_dotenv
 import json
 import pickle
 from sqlalchemy import create_engine
@@ -10,22 +9,8 @@ from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_t
 import psycopg2
 from prometheus_client import CollectorRegistry, Counter, push_to_gateway
 import argparse
-
-path = os.environ.get('PROJECT_PATH', '.')
-if path == '.':
-    logger.warning("PROJECT_PATH is not set. Using current directory as default.")
-
-FLAGS_FILE_SESSIONS = os.path.join(path, 'configs', 'processing_flags_sessions.json')
-RAW_DIR = os.path.join(path, 'data', 'raw', 'new_sessions')
-PROCESSED_DIR = os.path.join(path, 'data', 'processed', 'new_sessions')
-
-# Prometheus metrics
-registry = CollectorRegistry()
-sessions_transform_success = Counter('sessions_transform_success_total', 'Successful transforms', registry=registry)
-sessions_transform_fail = Counter('sessions_transform_fail_total', 'Failed transforms', registry=registry)
-sessions_db_success = Counter('sessions_db_success_total', 'Successful DB loads', registry=registry)
-sessions_db_fail = Counter('sessions_db_fail_total', 'Failed DB loads', registry=registry)
-
+from configs.directories import FLAGS_FILE_SESSIONS, DATA_RAW_SESSIONS, DATA_PROCESSED_SESSIONS
+load_dotenv()
 
 def log_operation(level: str, message: str, es_required: bool = False):
     try:
@@ -46,8 +31,14 @@ def log_operation(level: str, message: str, es_required: bool = False):
     except Exception as log_error:
         print(f"CRITICAL LOGGING FAILURE: {str(log_error)} | Original message: {message}")
 
+registry = CollectorRegistry()
+sessions_transform_success = Counter('sessions_transform_success_total', 'Successful transforms', registry=registry)
+sessions_transform_fail = Counter('sessions_transform_fail_total', 'Failed transforms', registry=registry)
+sessions_db_success = Counter('sessions_db_success_total', 'Successful DB loads', registry=registry)
+sessions_db_fail = Counter('sessions_db_fail_total', 'Failed DB loads', registry=registry)
 
-@retry(stop=stop_after_attempt(5), wait=wait_fixed(10), retry=retry_if_exception_type(OSError))
+
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(5), retry=retry_if_exception_type(OSError))
 def load_flags_sessions():
     try:
         if os.path.exists(FLAGS_FILE_SESSIONS):
@@ -74,20 +65,20 @@ def save_flags_sessions(flags):
 
 @retry(stop=stop_after_attempt(5), wait=wait_fixed(10), retry=retry_if_exception_type(ValueError))
 def transform_new_files_sessions():
-    if not os.path.exists(RAW_DIR):
-        log_operation('ERROR', f"Directory {RAW_DIR} does not exist.")
+    if not os.path.exists(DATA_RAW_SESSIONS):
+        log_operation('ERROR', f"Directory {DATA_RAW_SESSIONS} does not exist.")
         return
 
     flags = load_flags_sessions()
 
-    for file_name in os.listdir(RAW_DIR):
+    for file_name in os.listdir(DATA_RAW_SESSIONS):
         if not file_name.endswith('.json'):
             continue
 
-        file_path = os.path.join(RAW_DIR, file_name)
+        file_path = os.path.join(DATA_RAW_SESSIONS, file_name)
         file_name_pkl = file_name.replace('.json', '.pkl')
 
-        file_flags = flags['sessions_data'].setdefault(file_name, {
+        file_flags = flags['sessions_data'].setdefault(file_name_pkl, {
             "loaded": False,
             "transformed": False,
             "to_db": False,
@@ -133,8 +124,9 @@ def transform_new_files_sessions():
                 df.drop(columns='device_model', inplace=True, errors='ignore')
                 df['visit_time'] = pd.to_datetime(df['visit_time'], format='%H:%M:%S', errors='coerce').dt.time
 
-                file_name_pkl = file_name.replace('.json', '.pkl')
-                output_file = os.path.join(PROCESSED_DIR, file_name_pkl)
+                output_file = os.path.join(DATA_PROCESSED_SESSIONS, file_name_pkl)
+                df.to_pickle(output_file)
+
 
                 file_flags["transformed"] = True
                 file_flags["saved"] = True
@@ -153,45 +145,69 @@ def transform_new_files_sessions():
     log_operation('INFO', "All files have been processed.")
 
 
-@retry(stop=stop_after_attempt(5), wait=wait_fixed(10), retry=retry_if_exception_type(psycopg2.OperationalError))
+@retry(stop=stop_after_attempt(2), wait=wait_fixed(5), retry=retry_if_exception_type(psycopg2.OperationalError))
 def send_sessions_to_db():
-    if not os.path.exists(PROCESSED_DIR):
-        log_operation('ERROR', f"Directory {PROCESSED_DIR} does not exist.")
+    if not os.path.exists(DATA_PROCESSED_SESSIONS):
+        log_operation('ERROR', f"Directory {DATA_PROCESSED_SESSIONS} does not exist.")
         return
 
     flags = load_flags_sessions()
 
-    engine = create_engine("postgresql+psycopg2://Ekaterina_Firsova:376d51@localhost:5432/sber_de")
+    engine = create_engine(
+        f"postgresql+psycopg2://"
+        f"{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+        f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}"
+        f"/{os.getenv('DB_NAME')}"
+    )
 
-    for file_name in os.listdir(PROCESSED_DIR):
-        file_path = os.path.join(PROCESSED_DIR, file_name)
+    for file_name in os.listdir(DATA_PROCESSED_SESSIONS):
+        file_path = os.path.join(DATA_PROCESSED_SESSIONS, file_name)
 
-        if file_name not in flags["hits_data"]:
+        if file_name not in flags["sessions_data"]:
             continue
 
-        file_flags = flags["hits_data"][file_name]
+        file_flags = flags["sessions_data"][file_name]
         if not file_flags.get("transformed") or file_flags.get("to_db"):
             continue
+
         try:
             log_operation('INFO', f"Sending {file_name} to DB...")
 
             with open(file_path, 'rb') as f:
                 df = pd.DataFrame(pickle.load(f))
-            df.to_sql('sessions', con=engine, if_exists='append', index=False)
 
-            flags['sessions_data'][file_name]['to_db'] = True
-            save_flags_sessions(flags)
+            try:
+                df.to_sql(
+                    'sessions',
+                    con=engine,
+                    if_exists='append',
+                    index=False,
+                    method='multi'
+                )
 
-            sessions_db_success.inc()
+                flags['sessions_data'][file_name]['to_db'] = True
+                save_flags_sessions(flags)
+                sessions_db_success.inc()
+                log_operation('INFO', f"Success: {file_name} loaded to DB")
 
-            log_operation('INFO', f"Data from {file_name} loaded to DB.")
+            except Exception as e:
+                if "duplicate key value" in str(e).lower():
+                    log_operation('WARNING',
+                                  f"Skipped {file_name} (duplicates found in DB). "
+                                  f"Marking as processed."
+                                  )
+                    flags['sessions_data'][file_name]['to_db'] = True
+                    save_flags_sessions(flags)
+                    sessions_db_fail.inc()
+                else:
+                    raise
 
         except Exception as e:
             sessions_db_fail.inc()
-
-            log_operation('ERROR', f"DB load error for {file_name}: {e}")
-            raise
-
+            log_operation('ERROR',
+                          f"Failed to process {file_name}: {type(e).__name__} - {str(e)}"
+                          )
+            continue
 
 if __name__ == '__main__':
     try:

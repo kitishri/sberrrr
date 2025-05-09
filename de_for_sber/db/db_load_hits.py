@@ -1,23 +1,25 @@
+from pathlib import Path
+from dotenv import load_dotenv
+import os
 import pandas as pd
 from sqlalchemy import create_engine
+from configs.logging_config import logger, send_log_to_elasticsearch
 
 
+load_dotenv()
 
-# Параметры подключения
-DB_NAME = "sber_de"
-USER = "Ekaterina_Firsova"
-PASSWORD = "376d51"
-HOST = "localhost"
-PORT = 5432
+host_code_path = Path(os.getenv("HOST_CODE_PATH"))
 
-# Создание подключения
-engine = create_engine(f"postgresql+psycopg2://{USER}:{PASSWORD}@{HOST}:{PORT}/{DB_NAME}")
+file_path = host_code_path / 'data' / 'processed' / 'filtered_processed_hits.pkl'
 
-# Загрузка данных
-hits = pd.read_pickle("C:/Users/Ekaterina/sber_de/de_for_sber/data/processed/filtered_processed_hits.pkl")
+hits = pd.read_pickle(file_path)
 
+engine = create_engine(
+    f"postgresql+psycopg2://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+)
 
-# Загрузка данных в таблицу hits
-hits.to_sql('hits', engine, if_exists='append', index=False, chunksize=100000)
-print("Данные из hits успешно загружены!")
+hits.to_sql('hits', engine, if_exists='append', index=False)
+logger.info("Hits data successfully inserted into the database")
+send_log_to_elasticsearch("Hits data successfully inserted into the database")
 

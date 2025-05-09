@@ -1,7 +1,6 @@
 import pandas as pd
 import os
-import sys
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from dotenv import load_dotenv
 import json
 import pickle
 from sqlalchemy import create_engine
@@ -10,14 +9,9 @@ from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_t
 import psycopg2
 from prometheus_client import CollectorRegistry, Counter, push_to_gateway
 import argparse
-
-path = os.environ.get('PROJECT_PATH', '.')
-if path == '.':
-    logger.warning("PROJECT_PATH is not set. Using current directory as default.")
-
-FLAGS_FILE_HITS = os.path.join(path, 'configs', 'processing_flags_hits.json')
-RAW_DIR = os.path.join(path, 'data', 'raw', 'new_hits')
-PROCESSED_DIR = os.path.join(path, 'data', 'processed', 'new_hits')
+from configs.redis_conn import get_redis_connection
+from configs.directories import FLAGS_FILE_HITS, DATA_RAW_HITS, DATA_PROCESSED_HITS
+load_dotenv()
 
 def log_operation(level, message, es_required=False):
     try:
@@ -44,45 +38,61 @@ hits_transform_fail = Counter('hits_transform_fail_total', 'Hits transform fails
 hits_db_success = Counter('hits_db_success_total', 'Hits successfully sent to DB', registry=registry)
 hits_db_fail = Counter('hits_db_fail_total', 'Hits failed to send to DB', registry=registry)
 
+
 @retry(stop=stop_after_attempt(5), wait=wait_fixed(10), retry=retry_if_exception_type(OSError))
 def load_flags_hits():
     try:
-        if os.path.exists(FLAGS_FILE_HITS):
+        raw_data = get_redis_connection().get('flags:hits_data')
+        if raw_data:
+            log_operation('DEBUG', "Flags loaded from Redis")
+            return json.loads(raw_data)
+
+        elif os.path.exists(FLAGS_FILE_HITS):
             with open(FLAGS_FILE_HITS, 'r') as file:
-                log_operation('DEBUG', f"Loading flags from {FLAGS_FILE_HITS}")
-                return json.load(file)
+                log_operation('DEBUG', "Flags loaded from file (Redis empty)")
+                flags = json.load(file)
+
+                get_redis_connection().set('flags:hits_data', json.dumps(flags))
+
+                return flags
+
         else:
-            log_operation('INFO', "Flags file not found, creating new one")
+            log_operation('INFO', "Flags not found, initializing empty")
             flags = {"hits_data": {}}
             save_flags_hits(flags)
             return flags
+
     except Exception as e:
         log_operation('ERROR', f"Failed to load flags: {str(e)}")
         raise
 
 def save_flags_hits(flags):
     try:
+        get_redis_connection().set('flags:hits_data', json.dumps(flags))
+
         with open(FLAGS_FILE_HITS, 'w') as file:
             json.dump(flags, file, indent=4)
-            log_operation('DEBUG', "Flags successfully saved")
+
+        log_operation('DEBUG', "Flags saved to Redis and file")
+
     except Exception as e:
         log_operation('ERROR', f"Error saving flags: {e}")
         raise
 
 @retry(stop=stop_after_attempt(5), wait=wait_fixed(10), retry=retry_if_exception_type(ValueError))
 def transform_new_files_hits():
-    if not os.path.exists(RAW_DIR):
-        log_operation('ERROR', f"Directory {RAW_DIR} does not exist.")
+    if not os.path.exists(DATA_RAW_HITS):
+        log_operation('ERROR', f"Directory {DATA_RAW_HITS} does not exist.")
         return
 
     flags = load_flags_hits()
 
-    for file_name in os.listdir(RAW_DIR):
+    for file_name in os.listdir(DATA_RAW_HITS):
 
         if not file_name.endswith('.json'):
             continue
 
-        file_path = os.path.join(RAW_DIR, file_name)
+        file_path = os.path.join(DATA_RAW_HITS, file_name)
         file_name_pkl = file_name.replace('.json', '.pkl')
 
         file_flags = flags['hits_data'].setdefault(file_name_pkl, {
@@ -142,7 +152,7 @@ def transform_new_files_hits():
                 indexes_to_drop = to_drop.index
                 df_hits = df.drop(indexes_to_drop)
 
-                output_file = os.path.join(PROCESSED_DIR, file_name_pkl)
+                output_file = os.path.join(DATA_PROCESSED_HITS, file_name_pkl)
                 df_hits.to_pickle(output_file)
 
                 file_flags["transformed"] = True
@@ -150,7 +160,6 @@ def transform_new_files_hits():
                 save_flags_hits(flags)
 
                 hits_transform_success.inc()
-
                 log_operation('INFO', f"Transformed data saved to file: {output_file}")
 
             except Exception as e:
@@ -164,15 +173,21 @@ def transform_new_files_hits():
 
 @retry(stop=stop_after_attempt(5), wait=wait_fixed(10), retry=retry_if_exception_type(psycopg2.OperationalError))
 def send_hits_to_db():
-    if not os.path.exists(PROCESSED_DIR):
-        log_operation('ERROR', f"Directory {PROCESSED_DIR} does not exist.")
+    if not os.path.exists(DATA_PROCESSED_HITS):
+        log_operation('ERROR', f"Directory {DATA_PROCESSED_HITS} does not exist.")
         return
 
     flags = load_flags_hits()
-    engine = create_engine("postgresql+psycopg2://Ekaterina_Firsova:376d51@localhost:5432/sber_de")
 
-    for file_name in os.listdir(PROCESSED_DIR):
-        file_path = os.path.join(PROCESSED_DIR, file_name)
+    engine = create_engine(
+        f"postgresql+psycopg2://"
+        f"{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
+        f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}"
+        f"/{os.getenv('DB_NAME')}"
+    )
+
+    for file_name in os.listdir(DATA_PROCESSED_HITS):
+        file_path = os.path.join(DATA_PROCESSED_HITS, file_name)
 
         if file_name not in flags["hits_data"]:
             continue
@@ -184,23 +199,39 @@ def send_hits_to_db():
         try:
             log_operation('INFO', f"Sending data for {file_name} to database...")
             with open(file_path, 'rb') as file:
-                hits_new = pickle.load(file)
+                df_hits = pd.DataFrame(pickle.load(file))
 
-            df_hits = pd.DataFrame(hits_new)
-            df_hits.to_sql("hits", con=engine, if_exists="append", index=False)
+            try:
+                df_hits.to_sql(
+                    "hits",
+                    con=engine,
+                    if_exists="append",
+                    index=False,
+                    method='multi')
 
-            flags["hits_data"][file_name]["to_db"] = True
-            save_flags_hits(flags)
+                flags["hits_data"][file_name]["to_db"] = True
+                save_flags_hits(flags)
+                hits_db_success.inc()
+                log_operation('INFO', f"Data for {file_name} successfully saved to database.")
 
-            hits_db_success.inc()
-
-            log_operation('INFO', f"Data for {file_name} successfully saved to database.")
+            except Exception as e:
+                if "duplicate key value" in str(e).lower():
+                    log_operation('WARNING',
+                                  f"Skipped {file_name} (duplicates found in DB). "
+                                  f"Marking as processed."
+                                  )
+                    flags['sessions_data'][file_name]['to_db'] = True
+                    save_flags_hits(flags)
+                    hits_db_fail.inc()
+                else:
+                    raise
 
         except Exception as e:
             hits_db_fail.inc()
-
-            log_operation('ERROR', f"Error sending {file_name} to database: {e}")
-            raise
+            log_operation('ERROR',
+                          f"Failed to process {file_name}: {type(e).__name__} - {str(e)}"
+                          )
+            continue
 
 if __name__ == "__main__":
     try:

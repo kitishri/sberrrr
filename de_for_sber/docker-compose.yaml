@@ -1,50 +1,57 @@
 x-airflow-common:
   &airflow-common
-  image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.10.4}
-  environment:
-    &airflow-common-env
+  image: ${AIRFLOW_IMAGE_NAME}
+  env_file:
+    - .env  
+  environment: &airflow-common-env
+    PYTHONPATH: ${CONTAINER_CODE_PATH}
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__CORE__SQL_ALCHEMY_CONN: "postgresql+psycopg2://Ekaterina_Firsova:376d51@postgres:5432/sber_de"
-    AIRFLOW__CELERY__RESULT_BACKEND: 'db+postgresql://Ekaterina_Firsova:376d51@postgres/sber_de'
-    AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
+    AIRFLOW__CORE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}  
+    AIRFLOW__CELERY__RESULT_BACKEND: ${AIRFLOW__CELERY__RESULT_BACKEND}  
+    AIRFLOW__CELERY__BROKER_URL: ${AIRFLOW__CELERY__BROKER_URL}  
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
     AIRFLOW__CORE__LOAD_EXAMPLES: 'false'
     AIRFLOW__API__AUTH_BACKENDS: 'airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session'
     AIRFLOW__SCHEDULER__ENABLE_HEALTH_CHECK: 'true'
     _PIP_ADDITIONAL_REQUIREMENTS: ${_PIP_ADDITIONAL_REQUIREMENTS:-}
+
   volumes:
-    - ${AIRFLOW_HOME:-.}/dags:/opt/airflow/dags
-    - ${AIRFLOW_HOME:-.}/logs:/opt/airflow/logs
-    - ${AIRFLOW_HOME:-.}/config:/opt/airflow/config
-    - ${AIRFLOW_HOME:-.}/plugins:/opt/airflow/plugins
-    - ${AIRFLOW_HOME:-.}/scripts:/opt/airflow/scripts:rw
-    - ${AIRFLOW_HOME:-.}/configs:/opt/airflow/configs:rw
-    - ${AIRFLOW_HOME:-.}/data:/opt/airflow/data:rw
-    - ${AIRFLOW_HOME:-.}:/opt/airflow
+    - ${HOST_CODE_PATH}/dags:${CONTAINER_CODE_PATH}/dags
+    - ${HOST_CODE_PATH}/logs:${CONTAINER_CODE_PATH}/logs
+    - ${HOST_CODE_PATH}/config:${CONTAINER_CODE_PATH}/config
+    - ${HOST_CODE_PATH}/plugins:${CONTAINER_CODE_PATH}/plugins
+    - ${HOST_CODE_PATH}/scripts:${CONTAINER_CODE_PATH}/scripts:rw
+    - ${HOST_CODE_PATH}/configs:${CONTAINER_CODE_PATH}/configs:rw
+    - ${HOST_CODE_PATH}/data:${CONTAINER_CODE_PATH}/data:rw
+  
   user: "${AIRFLOW_UID:-50000}:0"
-  depends_on:
-    &airflow-common-depends-on
+  depends_on: &airflow-common-depends-on
     redis:
       condition: service_healthy
     postgres:
       condition: service_healthy
+  networks:
+    - backend
 
 services:
+
   postgres:
     image: postgres:13
     environment:
-      POSTGRES_USER: Ekaterina_Firsova
-      POSTGRES_PASSWORD: 376d51
-      POSTGRES_DB: sber_de
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
     volumes:
       - postgres-db-volume:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "pg_isready", "-U", "airflow"]
+      test: ["CMD-SHELL", "pg_isready -U $DB_USER"]
       interval: 10s
       retries: 5
       start_period: 5s
     restart: always
+    networks:
+      - backend
 
   redis:
     image: redis:7.2-bookworm
@@ -57,6 +64,8 @@ services:
       retries: 50
       start_period: 30s
     restart: always
+    networks:
+      - backend
 
   airflow-webserver:
     <<: *airflow-common
@@ -78,52 +87,24 @@ services:
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8974/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+    networks:
+      - backend
 
   airflow-worker:
     <<: *airflow-common
     command: celery worker
-    healthcheck:
-      test:
-        - "CMD-SHELL"
-        - 'celery --app airflow.providers.celery.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}" || celery --app airflow.executors.celery_executor.app inspect ping -d "celery@$${HOSTNAME}"'
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    environment:
-      <<: *airflow-common-env
-      DUMB_INIT_SETSID: "0"
     restart: always
     depends_on:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
-
-  airflow-triggerer:
-    <<: *airflow-common
-    command: triggerer
-    healthcheck:
-      test: ["CMD-SHELL", 'airflow jobs check --job-type TriggererJob --hostname "$${HOSTNAME}"']
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
-    depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
+    networks:
+      - backend
 
   airflow-init:
     <<: *airflow-common
@@ -140,41 +121,112 @@ services:
       _AIRFLOW_WWW_USER_CREATE: 'true'
       _AIRFLOW_WWW_USER_USERNAME: ${_AIRFLOW_WWW_USER_USERNAME:-airflow}
       _AIRFLOW_WWW_USER_PASSWORD: ${_AIRFLOW_WWW_USER_PASSWORD:-airflow}
-      _PIP_ADDITIONAL_REQUIREMENTS: ''
     user: "0:0"
     volumes:
-      - ${AIRFLOW_PROJ_DIR:-.}:/sources
+      - ${CONTAINER_CODE_PATH}:/opt/airflow
+    networks:
+      - backend
 
-  airflow-cli:
-    <<: *airflow-common
-    profiles:
-      - debug
-    environment:
-      <<: *airflow-common-env
-      CONNECTION_CHECK_MAX_COUNT: "0"
-    command:
-      - bash
-      - -c
-      - airflow
-
-  flower:
-    <<: *airflow-common
-    command: celery flower
-    profiles:
-      - flower
+  redis_flags:
+    image: redis:7.2
+    container_name: redis_flags
+    command: ["redis-server", "--databases", "2"]
     ports:
-      - "5555:5555"
-    healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:5555/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    restart: always
+      - "6380:6379"
+    volumes:
+      - redis_flags_data:/data
+    restart: unless-stopped
+    networks:
+      - backend
+
+  prometheus:
+    image: prom/prometheus
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml  
+    ports:
+      - "9090:9090"
+    networks:
+      - backend
+
+  pushgateway:
+    image: prom/pushgateway
+    container_name: pushgateway
+    ports:
+      - "9091:9091"
+    networks:
+      - backend
+
+  grafana:
+    image: grafana/grafana
+    container_name: grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin  
+    ports:
+      - "3000:3000"
+    networks:
+      - backend
+
+  elasticsearch:
+    image: elasticsearch:8.12.2     
+    container_name: elasticsearch
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    volumes:
+      - esdata:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    networks:
+      - backend
+
+  kibana:
+    image: kibana:8.12.2      
+    container_name: kibana
+    ports:
+      - "5601:5601"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:
-      <<: *airflow-common-depends-on
-      airflow-init:
-        condition: service_completed_successfully
+      - elasticsearch
+    networks:
+      - backend
+
+  hits_processor:
+    build:
+      context: .
+      dockerfile: Dockerfile.hits
+    volumes:
+      - ${HOST_CODE_PATH}:${CONTAINER_CODE_PATH}
+    environment:
+       - HOST_CODE_PATH=${HOST_CODE_PATH}
+    command: ["python", "scripts/new_data_hits.py"]
+    networks:
+      - backend
+
+  sessions_processor:
+    build:
+      context: .
+      dockerfile: Dockerfile.sessions
+    volumes:
+      - ${HOST_CODE_PATH}:${CONTAINER_CODE_PATH}
+    environment:
+      - HOST_CODE_PATH=${HOST_CODE_PATH}
+    command: ["python", "scripts/new_data_sessions.py"]
+    networks:
+      - backend
 
 volumes:
+  esdata:
+  redis_flags_data:
   postgres-db-volume:
+
+networks:
+  backend:
+    driver: bridge
