@@ -14,7 +14,6 @@ from sklearn.metrics import (
 load_dotenv()
 
 def load_model_and_scalers(model_dir):
-    """Загрузка модели и скейлеров"""
     model_dir = Path(model_dir)
     model = tf.keras.models.load_model(model_dir / "model.keras")
 
@@ -28,7 +27,6 @@ def load_model_and_scalers(model_dir):
 
 
 def create_sequences(df, features, target, window_size):
-    """Создание срезов для LSTM"""
     X_vals = df[features].values
     y_vals = df[target].values
 
@@ -45,21 +43,16 @@ def create_sequences(df, features, target, window_size):
 
 
 def predict_lstm(model_dir, data_path, output_path):
-    # 1. Загружаем модель и конфиг
     model, scaler_X, scaler_y, config = load_model_and_scalers(model_dir)
 
-    # 2. Загружаем данные
     df = pd.read_parquet(data_path)
 
-    # 3. Масштабируем
     df_scaled = df.copy()
     df_scaled[config['features']] = scaler_X.transform(df_scaled[config['features']])
     df_scaled[config['target']] = scaler_y.transform(df_scaled[[config['target']]])
 
-    # 4. Формируем последовательности
     X_seq, y_seq, idx_seq = create_sequences(df_scaled, config['features'], config['target'], config['window_size'])
 
-    # 5. Прогнозируем
     y_pred_scaled = model.predict(X_seq)
     y_pred_log = scaler_y.inverse_transform(y_pred_scaled.reshape(-1, 1))
     y_pred = np.expm1(y_pred_log).flatten()
@@ -67,7 +60,6 @@ def predict_lstm(model_dir, data_path, output_path):
     y_true_log = scaler_y.inverse_transform(y_seq.reshape(-1, 1))
     y_true = np.expm1(y_true_log).flatten()
 
-    # 6. Метрики
     mse = mean_squared_error(y_true, y_pred)
     rmse = np.sqrt(mse)
     mae = mean_absolute_error(y_true, y_pred)
@@ -86,7 +78,6 @@ def predict_lstm(model_dir, data_path, output_path):
         "MaxError": maxerr
     }
 
-    # 7. Сохраняем прогноз
     predictions_df = pd.DataFrame({
         "index": idx_seq,
         "true": y_true,
@@ -95,12 +86,10 @@ def predict_lstm(model_dir, data_path, output_path):
     output_path = Path(output_path)
     predictions_df.to_csv(output_path, index=False)
 
-    # 8. Сохраняем метрики в JSON рядом с CSV
     metrics_path = output_path.with_name(output_path.stem + "_metrics.json")
     with open(metrics_path, "w") as f:
         json.dump(metrics_dict, f, indent=2)
 
-    # 9. Вывод в консоль
     print(f"Прогноз сохранён в {output_path}")
     print(f"Метрики сохранены в {metrics_path}")
     print("\n=== Метрики модели ===")

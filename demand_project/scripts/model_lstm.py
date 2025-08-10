@@ -2,6 +2,8 @@ import os
 from datetime import datetime
 import json
 import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
 import joblib
 import pandas as pd
 from copy import deepcopy
@@ -11,9 +13,10 @@ from sklearn.model_selection import TimeSeriesSplit
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from tensorflow.keras.models import Sequential, clone_model
-from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.layers import LSTM, Dense, Dropout, BatchNormalization
 from tensorflow.keras.callbacks import EarlyStopping
-import tensorflow as tf
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.losses import Huber
 
 
 class LSTMModel:
@@ -41,6 +44,7 @@ class LSTMModel:
 
         with open(self.features_path, 'r') as f:
             features = json.load(f)
+
         return features
 
 
@@ -74,12 +78,17 @@ class LSTMModel:
 
     def _build_model(self):
         model = Sequential([
-            LSTM(64, activation='tanh', input_shape=(self.window_size, len(self.features))),
+            LSTM(
+                64,
+                activation='tanh',
+                input_shape=(self.window_size, len(self.features))
+            ),
+            BatchNormalization(),
             Dropout(0.2),
-            Dense(32, activation='relu'),
             Dense(1)
         ])
-        model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+        optimizer = Adam(learning_rate=0.001)
+        model.compile(optimizer=optimizer, loss=Huber(), metrics=['mae'])
         return model
 
     def _evaluate(self, model, X_test_seq, y_test_seq):
@@ -178,6 +187,107 @@ class LSTMModel:
         logger.info(f"Предсказания по фолдам сохранены: {predictions_path}")
 
         return metrics
+
+    @staticmethod
+    def plot_all(pred_csv: Path, df_parquet: Path, output_dir: Path, sample_size=5000):
+        sns.set(style="whitegrid", font_scale=1.2)
+        olive = "#708238"
+
+        df_full = pd.read_parquet(df_parquet)
+        df = pd.read_csv(pred_csv, low_memory=False).rename(columns={'true': 'y_true', 'pred': 'y_pred'})
+        df['val_index'] = df['val_index'].astype(int)
+
+        df_sample = (
+            df.sample(sample_size, random_state=42).sort_values('val_index')
+            if len(df) > sample_size else df.sort_values('val_index')
+        )
+
+        if {'val_index', 'y_true', 'y_pred'}.issubset(df_sample.columns):
+            tail_df = df_sample.tail(500)
+            plt.figure(figsize=(35, 8))
+            plt.plot(tail_df['val_index'], tail_df['y_true'], label="Истина", color='green', linewidth=10, alpha=0.4,
+                     marker='o',
+                     markersize=4)
+            plt.plot(tail_df['val_index'], tail_df['y_pred'], label="Прогноз", color='gray', linewidth=2,
+                     linestyle='--', marker='x', markersize=4)
+            plt.title("Истина vs Прогноз (последние 1000)")
+            plt.xlabel("val_index")
+            plt.ylabel("Значение")
+            plt.legend()
+            plt.tight_layout()
+            plt.savefig(output_dir / 'lstm' /  "true_vs_pred_sample.png", dpi=300)
+            plt.close()
+
+        folds = sorted(df['fold'].unique())
+        r2_scores = [r2_score(df[df['fold'] == f]['y_true'], df[df['fold'] == f]['y_pred']) for f in folds]
+        plt.figure(figsize=(10, 5))
+        sns.barplot(x=folds, y=r2_scores, palette=sns.light_palette(olive, n_colors=len(folds)))
+        plt.title("R² по фолдам")
+        plt.xlabel("Fold")
+        plt.ylabel("R²")
+        plt.ylim(0, 1)
+        plt.tight_layout()
+        plt.savefig(output_dir / 'lstm' / "r2_by_fold.png", dpi=300)
+        plt.close()
+
+        df_sample['delta_pct'] = (
+                np.abs(df_sample['y_true'] - df_sample['y_pred']) /
+                df_sample['y_true'].replace(0, np.nan) * 100
+        ).clip(upper=100)
+
+        rolling = df_sample['delta_pct'].rolling(window=50).mean()
+
+        plt.figure(figsize=(16, 6))
+        plt.plot(df_sample['val_index'], rolling, color='darkgreen', linewidth=2)
+        plt.title("Скользящее среднее дельты (%)")
+        plt.xlabel("val_index")
+        plt.ylabel("Отклонение, %")
+        plt.ylim(0, 100)
+        plt.tight_layout()
+        plt.savefig(output_dir / 'lstm' / "delta_pct.png", dpi=300)
+        plt.close()
+
+        merged = df_sample.merge(df_full, left_on='val_index', right_index=True, how='left')
+        merged['InvoiceDate'] = pd.to_datetime(merged['InvoiceDate'])
+
+        daily_cluster = merged.groupby(['InvoiceDate', 'RFM_Cluster'])['y_pred'].sum().reset_index()
+        weekly = (
+            daily_cluster
+            .groupby([pd.Grouper(key='InvoiceDate', freq='W'), 'RFM_Cluster'])['y_pred']
+            .sum()
+            .reset_index()
+        )
+
+        top_clusters = (
+            weekly.groupby('RFM_Cluster')['y_pred'].sum()
+            .sort_values(ascending=False)
+            .head(3)
+            .index
+        )
+        weekly = weekly[weekly['RFM_Cluster'].isin(top_clusters)]
+        palette = sns.color_palette("Greens_d", len(top_clusters))
+
+        plt.figure(figsize=(16, 6))
+        for i, (cluster, group) in enumerate(weekly.groupby('RFM_Cluster')):
+            plt.plot(
+                group['InvoiceDate'],
+                group['y_pred'],
+                label=f"Кластер {cluster}",
+                color=palette[i],
+                marker='o',
+                linestyle='-',
+                linewidth=2,
+                markersize=5,
+                alpha=0.9
+            )
+        plt.title("Прогноз по кластерам (недельная агрегация, топ-3)")
+        plt.xlabel("Дата")
+        plt.ylabel("Спрос")
+        plt.xticks(rotation=45)
+        plt.legend(title='RFM Кластер')
+        plt.tight_layout()
+        plt.savefig(output_dir / 'lstm' / "pred_by_cluster_time_sample.png", dpi=300)
+        plt.close()
 
     def save_model(self, model_name=None, history=None):
 
